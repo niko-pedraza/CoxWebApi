@@ -13,6 +13,7 @@ namespace CoxWebApi
 {
     class CoxWebApiService
     {
+
         // API Endpoints
         private readonly string CreateNewDataset = "https://api.coxauto-interview.com/api/datasetId";
         private readonly string SubmitAnswer = "https://api.coxauto-interview.com/api/{0}/answer";
@@ -23,6 +24,9 @@ namespace CoxWebApi
         // private variables
         private readonly HttpClient _client;
         private ConcurrentDictionary<int,List<VehicleAnswer>> _dealerCorrespondedVehicles = new ConcurrentDictionary<int, List<VehicleAnswer>>();
+        private List<DealerAnswer> _dealers = new List<DealerAnswer>();
+
+        //Response Variables
         private AnswerResponse _answerResponse;
         private DatasetIdResponse _datasetIdResponse;
         private DealersResponse _dealersResponse;
@@ -46,79 +50,70 @@ namespace CoxWebApi
             // Retrieve the Vehicle list
             _vehicleIdsResponse = GetResponse<VehicleIdsResponse>(string.Format(VehicleList, _datasetIdResponse.datasetId)).Result;
             
-
-
-
+            // Pair Dealers to vehicles, find dealer info, format data all together
             Parallel.ForEach(_vehicleIdsResponse.vehicleIds, (number) =>
             {
-                var vehicleResponse = GetResponse<VehicleResponse>(string.Format(VehicleInfo, datasetIdResponse.datasetId, number)).Result;
-                var vehicleAnswer = new VehicleAnswer();
-                vehicleAnswer.make = vehicleResponse.make;
-                vehicleAnswer.model = vehicleResponse.model;
-                vehicleAnswer.year = vehicleResponse.year;
-                vehicleAnswer.vehicleId = vehicleResponse.vehicleid;
-
-                if (!idWithVehicleList.ContainsKey(vehicleResponse.dealerId))
-                {
-                    idWithVehicleList.TryAdd(vehicleResponse.dealerId, new List<VehicleAnswer>());
-
-                }
-                idWithVehicleList[vehicleResponse.dealerId].Add(vehicleAnswer);
-     
+                PairDealerVehicleList(number);
             });
-
-
-            var dealers = new List<DealerAnswer>();
-            Parallel.ForEach(idWithVehicleList.Keys.ToArray(), (num) =>
+            Parallel.ForEach(_dealerCorrespondedVehicles.Keys.ToArray(), (num) =>
             {
-                var dealerResponse = GetResponse<DealersResponse>(string.Format(DealerInfo, _datasetIdResponse.datasetId, num)).Result;
-                Print(dealerResponse);
-
-                var dealerAnswer = new DealerAnswer();
-                dealerAnswer.dealerId = dealerResponse.dealerId;
-                dealerAnswer.name = dealerResponse.name;
-                dealerAnswer.vehicles = idWithVehicleList[num].ToArray();
-                Print(dealerAnswer);
-
-                dealers.Add(dealerAnswer);
-
+                DealersList(num);
             });
-
             var answer = new Answer();
-            answer.dealers = dealers.ToArray();
-            Print(answer);
-
-
-            // send answer 
-            var answerResponse = PostAnswer<AnswerResponse,Answer>(string.Format(SubmitAnswer, _datasetIdResponse.datasetId), answer).Result;
-            Print(answerResponse);
+            answer.dealers = _dealers.ToArray();
+        
+            // Post Answer
+           _answerResponse = PostAnswer<AnswerResponse,Answer>(string.Format(SubmitAnswer, _datasetIdResponse.datasetId), answer).Result;
+            
+            Print(_answerResponse);
         }
 
-        public void AddDealer(int vehicleid) {
-
-            var vehicleResponse = GetResponse<VehicleResponse>(string.Format(VehicleInfo, _datasetIdResponse.datasetId, number)).Result;
+        /// <summary>
+        /// Populates the global variable "_dealerCorrespondedVehicles" 
+        /// </summary>
+        /// <param name="vehicleid">Int32</param>
+        public void PairDealerVehicleList(int vehicleid) {
+            
+            _vehicleResponse = GetResponse<VehicleResponse>(string.Format(VehicleInfo, _datasetIdResponse.datasetId, vehicleid)).Result;
+            
             var vehicleAnswer = new VehicleAnswer();
-            vehicleAnswer.make = vehicleResponse.make;
-            vehicleAnswer.model = vehicleResponse.model;
-            vehicleAnswer.year = vehicleResponse.year;
-            vehicleAnswer.vehicleId = vehicleResponse.vehicleid;
+            vehicleAnswer.make = _vehicleResponse.make;
+            vehicleAnswer.model = _vehicleResponse.model;
+            vehicleAnswer.year = _vehicleResponse.year;
+            vehicleAnswer.vehicleId = _vehicleResponse.vehicleid;
 
-            if (!idWithVehicleList.ContainsKey(vehicleResponse.dealerId))
+            if (!_dealerCorrespondedVehicles.ContainsKey(_vehicleResponse.dealerId))
             {
-                idWithVehicleList.TryAdd(vehicleResponse.dealerId, new List<VehicleAnswer>());
+                _dealerCorrespondedVehicles.TryAdd(_vehicleResponse.dealerId, new List<VehicleAnswer>());
 
             }
-            idWithVehicleList[vehicleResponse.dealerId].Add(vehicleAnswer);
+            _dealerCorrespondedVehicles[_vehicleResponse.dealerId].Add(vehicleAnswer);
 
         }
 
-
-
-        public void Print(object x)
+        /// <summary>
+        /// Populates the global variable "_dealers"
+        /// </summary>
+        /// <param name="dealerId">Int32</param>
+        public void DealersList(int dealerId) 
         {
-            Console.WriteLine(JsonConvert.SerializeObject(x));
+            _dealersResponse = GetResponse<DealersResponse>(string.Format(DealerInfo, _datasetIdResponse.datasetId, dealerId)).Result;
+           
+            var dealerAnswer = new DealerAnswer();
+            dealerAnswer.dealerId = _dealersResponse.dealerId;
+            dealerAnswer.name = _dealersResponse.name;
+            dealerAnswer.vehicles = _dealerCorrespondedVehicles[dealerId].ToArray();
+
+            _dealers.Add(dealerAnswer);
+
         }
 
+        /// <summary>
+        /// send GET request to endpoint "url" in JSON format
+        /// </summary>
+        /// <typeparam name="T">Generic Type Object</typeparam>
+        /// <param name="url"></param>
+        /// <returns></returns>
         public async Task<T> GetResponse<T>(string url)
         {
 
@@ -128,11 +123,11 @@ namespace CoxWebApi
         }
 
         /// <summary>
-        /// Convert object to Json string , send POST request to endpoint "url"
+        /// Format Content from object , send POST request to endpoint "url" in JSON format
         /// </summary>
-        /// <typeparam name="T">Generic Response object</typeparam>
+        /// <typeparam name="T">Generic Type Object</typeparam>
         /// <param name="url">string Endpoint</param>
-        /// <param name="ans">Answer object</param>
+        /// <param name="ans">Generic object</param>
         /// <returns>Generic Response object</returns>
         public async Task<T> PostAnswer<T,U>(string url, U ans)
         {
@@ -142,6 +137,12 @@ namespace CoxWebApi
             var response = await _client.PostAsync(url, content);
             string jsonResponse = await response.Content.ReadAsStringAsync();
             return JsonConvert.DeserializeObject<T>(jsonResponse);
+        }
+
+
+        public void Print(object x)
+        {
+            Console.WriteLine(JsonConvert.SerializeObject(x));
         }
     }
 }
